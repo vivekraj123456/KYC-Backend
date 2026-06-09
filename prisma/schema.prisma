@@ -1,0 +1,122 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                                             Int              @id @default(autoincrement())
+  phone                                          String           @unique
+  email                                          String?          @unique
+  password                                       String?
+  role                                           String           @default("user")
+  createdAt                                      DateTime         @default(now())
+  updatedAt                                      DateTime         @updatedAt
+  lastLoginAt                                    DateTime?
+  metadata                                       String?          @db.LongText
+  riskScore                                      Int              @default(0)
+  status                                         String           @default("active")
+  auditLogs                                      AuditLog[]
+  KycApplication_KycApplication_assignedToToUser KycApplication[] @relation("KycApplication_assignedToToUser")
+  reviewedApps                                   KycApplication[] @relation("ReviewedBy")
+  kycApplications                                KycApplication[]
+}
+
+model KycApplication {
+  id                                   Int       @id @default(autoincrement())
+  userId                               Int
+  applicationId                        String    @unique
+  status                               String    @default("pending")
+  currentStep                          Int       @default(0)
+  personalDetails                      String?   @db.LongText
+  identityMethod                       String?
+  identityDetails                      String?   @db.LongText
+  ocrData                              String?   @db.LongText
+  faceMatchScore                       Float?
+  address                              String?   @db.LongText
+  bankDetails                          String?   @db.LongText
+  nomineeDetails                       String?   @db.LongText
+  nomineeAllocation                    String?   @db.LongText
+  panUpload                            String?   @db.LongText
+  signature                            String?   @db.LongText
+  financialProof                       String?   @db.LongText
+  selfieDetails                        String?   @db.LongText
+  documents                            String?   @db.LongText
+  selfie                               String?
+  consent                              Boolean   @default(false)
+  rejectionReason                      String?
+  nsdlRequest                          String?   @db.LongText
+  nsdlResponse                         String?   @db.LongText
+  segments                             String?   @db.LongText
+  bsda                                 String?
+  generatedPdfBase64                   String?   @db.LongText
+  submittedAt                          DateTime?
+  reviewedAt                           DateTime?
+  reviewedBy                           Int?
+  createdAt                            DateTime  @default(now())
+  updatedAt                            DateTime  @updatedAt
+  stepStatuses                         String?   @db.LongText
+  assignedCrmAgentId                   Int?
+  assignedTo                           Int?
+  deviceType                           String?
+  ipAddress                            String?
+  riskCategory                         String    @default("low")
+  riskScore                            Int       @default(0)
+  source                               String    @default("organic")
+  User_KycApplication_assignedToToUser User?     @relation("KycApplication_assignedToToUser", fields: [assignedTo], references: [id])
+  reviewer                             User?     @relation("ReviewedBy", fields: [reviewedBy], references: [id])
+  user                                 User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([assignedTo], map: "KycApplication_assignedTo_fkey")
+  @@index([reviewedBy], map: "KycApplication_reviewedBy_fkey")
+  @@index([userId], map: "KycApplication_userId_fkey")
+}
+
+model AuditLog {
+  id         Int      @id @default(autoincrement())
+  userId     Int?
+  action     String
+  details    String?  @db.LongText
+  ipAddress  String?
+  timestamp  DateTime @default(now())
+  adminId    Int?
+  newValue   String?  @db.LongText
+  oldValue   String?  @db.LongText
+  targetId   String?
+  targetType String?
+  userAgent  String?
+  crmAgentId Int?
+  crmAgentName String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId], map: "AuditLog_userId_fkey")
+}
+
+model ApiLog {
+  id            Int      @id @default(autoincrement())
+  service       String
+  endpoint      String
+  method        String
+  requestBody   String?  @db.LongText
+  responseBody  String?  @db.LongText
+  statusCode    Int
+  latency       Int
+  applicationId String?
+  userId        Int?
+  error         String?
+  timestamp     DateTime @default(now())
+}
+
+model Role {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique
+  label       String?
+  description String?
+  permissions String   @db.LongText
+  color       String?  @default("#7c3aed")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime
+}
