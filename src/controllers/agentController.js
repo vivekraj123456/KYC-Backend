@@ -45,7 +45,7 @@ const getAssignedApplications = async (req, res, next) => {
           riskScore: true,
           faceMatchScore: true,
           assignedCrmAgentId: true,
-          user: { select: { email: true, phone: true } }
+          user: { select: { email: true, phone: true, eStamp: true } }
         }
       }),
       prisma.kycApplication.count({ where })

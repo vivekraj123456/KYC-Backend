@@ -14,7 +14,9 @@ const {
   refreshFromDigio,
   sendToBackoffice,
   getCrmEmployees,
-  assignApplication
+  assignApplication,
+  updateUserEstamp,
+  updateEstampSequence
 } = require("../controllers/adminController");
 const { adminAuth } = require("../middlewares/auth");
 
@@ -35,5 +37,7 @@ router.post("/application/:id/refresh-digio", adminAuth, refreshFromDigio);
 router.post("/application/:id/send-backoffice", adminAuth, sendToBackoffice);
 router.get("/crm-employees", adminAuth, getCrmEmployees);
 router.post("/application/:id/assign", adminAuth, assignApplication);
+router.put("/users/:id/estamp", adminAuth, updateUserEstamp);
+router.put("/sequence/estamp", adminAuth, updateEstampSequence);
 
 module.exports = router;

@@ -12,6 +12,7 @@ const kycRoutes = require("./src/routes/kycRoutes");
 const adminRoutes = require("./src/routes/adminRoutes");
 const digioRoutes = require("./src/routes/digioRoutes");
 const agentRoutes = require("./src/routes/agentRoutes");
+const crmRoutes = require("./src/routes/crmRoutes");
 const errorHandler = require("./src/middlewares/errorHandler");
 
 const app = express();
@@ -120,6 +121,7 @@ app.use("/api/kyc", kycRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/digio", digioRoutes);
 app.use("/api/agent", agentRoutes);
+app.use("/api/crm", crmRoutes);
 
 // Root route
 app.get("/", (req, res) => {

@@ -13,6 +13,7 @@ model User {
   email                                          String?          @unique
   password                                       String?
   role                                           String           @default("user")
+  eStamp                                         String?          @unique
   createdAt                                      DateTime         @default(now())
   updatedAt                                      DateTime         @updatedAt
   lastLoginAt                                    DateTime?
@@ -119,4 +120,10 @@ model Role {
   color       String?  @default("#7c3aed")
   createdAt   DateTime @default(now())
   updatedAt   DateTime
+}
+
+model Sequence {
+  id    Int    @id @default(autoincrement())
+  name  String @unique
+  value Int    @default(0)
 }

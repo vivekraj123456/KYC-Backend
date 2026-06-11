@@ -68,7 +68,7 @@ const getApplications = async (req, res, next) => {
         { applicationId: { contains: q } },
         { user: { phone: { contains: q } } },
         { user: { email: { contains: q } } },
-        { personalDetails: { path: ["fullName"], string_contains: q } }
+        { personalDetails: { contains: q } }
       ];
     }
 
@@ -93,7 +93,8 @@ const getApplications = async (req, res, next) => {
             select: {
               id: true,
               phone: true,
-              email: true
+              email: true,
+              eStamp: true
             }
           }
         }
@@ -214,6 +215,24 @@ const reviewApplication = async (req, res, next) => {
       data: updateData,
     });
 
+    if (status === "verified") {
+      const user = await prisma.user.findUnique({ where: { id: app.userId } });
+      if (user && !user.eStamp) {
+        await prisma.$transaction(async (tx) => {
+          const seq = await tx.sequence.upsert({
+            where: { name: 'eStamp' },
+            update: { value: { increment: 1 } },
+            create: { name: 'eStamp', value: 1 }
+          });
+          const formattedStamp = String(seq.value).padStart(6, '0');
+          await tx.user.update({
+            where: { id: app.userId },
+            data: { eStamp: formattedStamp }
+          });
+        });
+      }
+    }
+
     await prisma.auditLog.create({
       data: {
         userId: isKycAgent ? null : req.user.id,
@@ -240,7 +259,14 @@ const reviewApplication = async (req, res, next) => {
 
 const getStats = async (req, res, next) => {
   try {
-    const [total, pending, review, verified, rejected, onHold, recent] = await Promise.all([
+    const fourteenDaysAgo = new Date();
+    fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 13);
+    fourteenDaysAgo.setHours(0, 0, 0, 0);
+
+    const [
+      total, pending, review, verified, rejected, onHold, recent, 
+      recentAppsForTrend, allAppsForDropoff, recentLogs
+    ] = await Promise.all([
       prisma.kycApplication.count(),
       prisma.kycApplication.count({ where: { status: "pending" } }),
       prisma.kycApplication.count({ where: { status: "under_review" } }),
@@ -250,13 +276,101 @@ const getStats = async (req, res, next) => {
       prisma.kycApplication.findMany({
         orderBy: { createdAt: "desc" },
         take: 10,
-        include: {
-          user: { select: { email: true, phone: true } }
-        }
+        include: { user: { select: { email: true, phone: true } } }
+      }),
+      // For Weekly Trend (14 days)
+      prisma.kycApplication.findMany({
+        where: { createdAt: { gte: fourteenDaysAgo } },
+        select: { createdAt: true }
+      }),
+      // For Drop-off Funnel
+      prisma.kycApplication.groupBy({
+        by: ['currentStep'],
+        _count: { currentStep: true }
+      }),
+      // For Live Activity
+      prisma.auditLog.findMany({
+        orderBy: { timestamp: "desc" },
+        take: 6,
+        include: { user: { select: { email: true, phone: true } } }
       })
     ]);
 
-    res.json({ success: true, total, pending, review, verified, rejected, onHold, recent });
+    // 1. Calculate Weekly Trend
+    const weeklyTrend = Array(14).fill(0);
+    const now = new Date();
+    recentAppsForTrend.forEach(app => {
+      const diffDays = Math.floor((now - app.createdAt) / (1000 * 60 * 60 * 24));
+      if (diffDays >= 0 && diffDays < 14) {
+        weeklyTrend[13 - diffDays]++;
+      }
+    });
+
+    // 2. Calculate Drop-off Funnel
+    let stepCounts = { setup: 0, identity: 0, personal: 0, docs: 0, esign: 0 };
+    allAppsForDropoff.forEach(group => {
+      const step = group.currentStep;
+      const count = group._count.currentStep;
+      if (step <= 3) stepCounts.setup += count;
+      else if (step <= 5) stepCounts.identity += count;
+      else if (step <= 10) stepCounts.personal += count;
+      else if (step <= 12) stepCounts.docs += count;
+      else stepCounts.esign += count;
+    });
+
+    const dropOff = total > 0 ? [
+      { step: "Contact & Setup", rate: Math.round((stepCounts.setup / total) * 100) },
+      { step: "Identity & Address", rate: Math.round((stepCounts.identity / total) * 100) },
+      { step: "Personal & Bank", rate: Math.round((stepCounts.personal / total) * 100) },
+      { step: "Documents & Selfie", rate: Math.round((stepCounts.docs / total) * 100) },
+      { step: "eSign & Completion", rate: Math.round((stepCounts.esign / total) * 100) },
+    ] : [
+      { step: "Contact & Setup", rate: 0 },
+      { step: "Identity & Address", rate: 0 },
+      { step: "Personal & Bank", rate: 0 },
+      { step: "Documents & Selfie", rate: 0 },
+      { step: "eSign & Completion", rate: 0 },
+    ];
+
+    // 3. Format Live Activity
+    const mapAction = (action) => {
+      if (action.includes("verified")) return { name: "KYC Approved", color: "#30a46c" };
+      if (action.includes("rejected")) return { name: "KYC Rejected", color: "#e5484d" };
+      if (action.includes("submitted")) return { name: "KYC Submitted", color: "#0091ff" };
+      if (action.includes("review")) return { name: "Moved to Review", color: "#ffb224" };
+      if (action.includes("client_update")) return { name: "Backoffice Sync", color: "#8E4EC6" };
+      if (action.includes("assigned")) return { name: "Agent Assigned", color: "#0091ff" };
+      return { name: action.replace("kyc_", "").replace(/_/g, " ").replace(/\b\w/g, l => l.toUpperCase()), color: "#888" };
+    };
+
+    const formatTimeAgo = (date) => {
+      const mins = Math.floor((now - date) / 60000);
+      if (mins < 1) return "Just now";
+      if (mins < 60) return `${mins} min${mins !== 1 ? 's' : ''} ago`;
+      const hrs = Math.floor(mins / 60);
+      if (hrs < 24) return `${hrs} hr${hrs !== 1 ? 's' : ''} ago`;
+      return `${Math.floor(hrs / 24)} days ago`;
+    };
+
+    const liveActivity = recentLogs.map(log => {
+      const actionDetails = mapAction(log.action);
+      let userName = "System";
+      if (log.user?.email) userName = log.user.email.split("@")[0];
+      else if (log.user?.phone) userName = log.user.phone;
+      else if (log.crmAgentName) userName = log.crmAgentName;
+
+      return {
+        action: actionDetails.name,
+        user: userName,
+        time: formatTimeAgo(log.timestamp),
+        color: actionDetails.color
+      };
+    });
+
+    res.json({ 
+      success: true, total, pending, review, verified, rejected, onHold, recent,
+      weeklyTrend, dropOff, liveActivity
+    });
   } catch (error) {
     next(error);
   }
@@ -706,6 +820,62 @@ const assignApplication = async (req, res, next) => {
     next(error);
   }
 };
+
+const updateUserEstamp = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { eStamp } = req.body;
+    
+    if (!eStamp || typeof eStamp !== "string") {
+      return res.status(400).json({ success: false, error: "Valid eStamp is required" });
+    }
+
+    // Check if duplicate eStamp exists
+    const existing = await prisma.user.findUnique({ where: { eStamp } });
+    if (existing && existing.id !== Number(id)) {
+      return res.status(400).json({ success: false, error: "This E-Stamp is already assigned to another user" });
+    }
+
+    await prisma.user.update({
+      where: { id: Number(id) },
+      data: { eStamp }
+    });
+
+    await prisma.auditLog.create({
+      data: {
+        userId: req.user.id,
+        action: "updated_estamp",
+        details: JSON.stringify({ targetUserId: id, eStamp }),
+        ipAddress: req.ip,
+      },
+    });
+
+    res.json({ success: true, message: "E-Stamp updated successfully", eStamp });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const updateEstampSequence = async (req, res, next) => {
+  try {
+    const { nextSequenceValue } = req.body;
+    
+    if (typeof nextSequenceValue !== "number" || nextSequenceValue < 0) {
+      return res.status(400).json({ success: false, error: "Valid numeric sequence value is required" });
+    }
+
+    const seq = await prisma.sequence.upsert({
+      where: { name: 'eStamp' },
+      update: { value: nextSequenceValue - 1 }, // we subtract 1 because generation increments it by 1
+      create: { name: 'eStamp', value: nextSequenceValue - 1 }
+    });
+
+    res.json({ success: true, message: "E-Stamp sequence updated successfully" });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getApplications,
   getApplicationById,
@@ -714,12 +884,14 @@ module.exports = {
   getStats,
   getAuditLogs,
   getUsers,
-  getUserKycDetails,
   getRiskFraud,
   getDocuments,
   getFaceMatchLogs,
+  getUserKycDetails,
   refreshFromDigio,
   sendToBackoffice,
   getCrmEmployees,
-  assignApplication
+  assignApplication,
+  updateUserEstamp,
+  updateEstampSequence
 };
