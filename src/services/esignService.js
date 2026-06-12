@@ -10,35 +10,57 @@ class EsignService {
    * Generates the PDF on the backend to avoid payload size issues.
    */
   async createRequest(customerIdentifier, aadhaar, applicationData = {}) {
+    const FormData = require('form-data');
+    
     // 1. Generate the PDF locally on the server
     console.log(`[EsignService] Generating PDF for ${customerIdentifier}...`);
     const pdfBase64 = await generateKycPdf(applicationData);
+    const pdfBuffer = Buffer.from(pdfBase64, 'base64');
 
-    // 2. Prepare Digio Request (DID Flow - Document ID)
-    const endpoint = "v2/client/document/uploadpdf";
-    const payload = {
-      file_name: `KYC_Application_${customerIdentifier}.pdf`,
-      file_data: pdfBase64,
-      signature_type: "aadhaar", // Mandatory at root for some versions
+    // 2. Prepare Digio Request (Multipart DID Flow)
+    const endpoint = "v2/client/document/upload";
+    
+    // Parse personal details string
+    let parsedPersonalDetails = {};
+    try {
+      if (typeof applicationData.personalDetails === 'string') {
+        parsedPersonalDetails = JSON.parse(applicationData.personalDetails);
+      } else if (typeof applicationData.personalDetails === 'object') {
+        parsedPersonalDetails = applicationData.personalDetails;
+      }
+    } catch (e) {
+      console.warn("Failed to parse personalDetails for eSign name");
+    }
+
+    const requestDetails = {
       signers: [
         {
           identifier: customerIdentifier,
-          name: applicationData.personalDetails?.fullName || "KYC User",
-          reason: "KYC Application Signing",
+          name: parsedPersonalDetails.fullName || "KYC User",
+          reason: "KYC Application Signing by STOCKOLOGY SECURITIES PRIVATE LIMITED",
           sign_type: "aadhaar"
         }
       ],
       expire_in_days: 10,
-      display_on_page: "last", // Only sign the last page (the Summary Annexure)
+      display_on_page: "all",
       notify_signers: true,
-      send_sign_link: false, // We use the SDK/modal, so don't send link automatically
+      send_sign_link: false,
       generate_access_token: true
     };
 
-    console.log(`[EsignService] Uploading generated PDF for ${customerIdentifier} (Base64 length: ${pdfBase64.length})`);
+    const form = new FormData();
+    form.append('file', pdfBuffer, { filename: `KYC_Application_${customerIdentifier}.pdf`, contentType: 'application/pdf' });
+    form.append('request', JSON.stringify(requestDetails), { contentType: 'application/json' });
+
+    console.log(`[EsignService] Uploading generated PDF via multipart for ${customerIdentifier} (Buffer size: ${pdfBuffer.length} bytes)`);
     
     try {
-      const response = await digioClient.post(endpoint, payload);
+      // Pass the form and custom headers to the digioClient.post wrapper
+      const response = await digioClient.post(endpoint, form, {
+        headers: {
+          ...form.getHeaders()
+        }
+      });
       console.log(`[EsignService] Digio Request Created: ${response.id}`);
       return { ...response, pdfBase64 };
     } catch (error) {
@@ -70,7 +92,7 @@ class EsignService {
    */
   async downloadDocument(docId) {
     const endpoint = `v2/client/document/download?document_id=${docId}`;
-    return await digioClient.get(endpoint, { responseType: 'arraybuffer' });
+    return await digioClient.http.get(endpoint, { responseType: 'arraybuffer' });
   }
 }
 

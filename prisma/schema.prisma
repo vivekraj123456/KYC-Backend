@@ -24,6 +24,7 @@ model User {
   KycApplication_KycApplication_assignedToToUser KycApplication[] @relation("KycApplication_assignedToToUser")
   reviewedApps                                   KycApplication[] @relation("ReviewedBy")
   kycApplications                                KycApplication[]
+  eStampAssigned                                 EStamp?          @relation("EStampAssigned")
 }
 
 model KycApplication {
@@ -126,4 +127,18 @@ model Sequence {
   id    Int    @id @default(autoincrement())
   name  String @unique
   value Int    @default(0)
+}
+
+model EStamp {
+  id            Int      @id @default(autoincrement())
+  certificateNo String   @unique
+  serialNo      String   @unique
+  fileUrl       String   @db.LongText
+  status        String   @default("available") // "available", "assigned"
+  assignedTo    Int?     @unique
+  user          User?    @relation("EStampAssigned", fields: [assignedTo], references: [id])
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([assignedTo], map: "EStamp_assignedTo_fkey")
 }

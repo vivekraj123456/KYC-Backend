@@ -9,7 +9,8 @@ const {
   submitKyc,
   getStatus,
   getKycConfig,
-  getPincodeData
+  getPincodeData,
+  downloadPdf
 } = require("../controllers/kycController");
 const { auth } = require("../middlewares/auth");
 const upload = require("../middlewares/upload");
@@ -35,6 +36,7 @@ router.post("/ocr-extract", auth, ocrExtract);
 router.post("/face-match", auth, faceMatch);
 router.post("/submit", auth, submitKyc);
 router.get("/status/:applicationId", auth, getStatus);
+router.get("/download-pdf/:applicationId", auth, downloadPdf);
 router.get("/config", getKycConfig);
 router.get("/pincode/:pin", getPincodeData);
 

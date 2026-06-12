@@ -19,8 +19,11 @@ const {
   updateEstampSequence
 } = require("../controllers/adminController");
 const { adminAuth } = require("../middlewares/auth");
+const estampRoutes = require("./estampRoutes");
 
 const router = express.Router();
+
+router.use("/estamp", estampRoutes);
 
 router.get("/applications", adminAuth, getApplications);
 router.get("/application/:id", adminAuth, getApplicationById);

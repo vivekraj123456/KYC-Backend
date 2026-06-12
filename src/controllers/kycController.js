@@ -351,7 +351,7 @@ const saveStep = async (req, res, next) => {
       // or if the status is not 'verified'/'under_review'.
       // Actually, just a simple rule: don't let a client-side 'saveStep' decrease the step 
       // if it's already at 16, unless it's an admin.
-      const isAlreadyCompleted = app.currentStep >= 16;
+      const isAlreadyCompleted = app.currentStep >= 14;
       const isAttemptingBacktrack = safeStep < app.currentStep;
 
       if (isAlreadyCompleted && isAttemptingBacktrack && req.user.role !== "admin") {
@@ -365,6 +365,41 @@ const saveStep = async (req, res, next) => {
     console.log(`[KYC SaveStep] Saving ${Object.keys(updateData).length} fields for App: ${applicationId}`);
 
     try {
+      // Auto-assign or unassign E-Stamp based on DDPI selection
+      if (updateData.personalDetails) {
+        const pd = parseJsonField(updateData.personalDetails);
+        if (pd.ddpi === "Yes") {
+          const existingStamp = await prisma.eStamp.findUnique({
+            where: { assignedTo: req.user.id }
+          });
+          if (!existingStamp) {
+            const availableStamp = await prisma.eStamp.findFirst({
+              where: { status: "available" }
+            });
+            if (availableStamp) {
+              await prisma.eStamp.update({
+                where: { id: availableStamp.id },
+                data: { status: "assigned", assignedTo: req.user.id }
+              });
+              console.log(`[E-Stamp] Auto-assigned ${availableStamp.certificateNo} to user ${req.user.id}`);
+            } else {
+              console.warn(`[E-Stamp] No available e-stamps to assign to user ${req.user.id}`);
+            }
+          }
+        } else if (pd.ddpi === "No" || pd.ddpi === false || pd.ddpi === "false") {
+          const existingStamp = await prisma.eStamp.findUnique({
+            where: { assignedTo: req.user.id }
+          });
+          if (existingStamp) {
+            await prisma.eStamp.update({
+              where: { id: existingStamp.id },
+              data: { status: "available", assignedTo: null }
+            });
+            console.log(`[E-Stamp] Unassigned ${existingStamp.certificateNo} from user ${req.user.id} because DDPI is No`);
+          }
+        }
+      }
+
       await prisma.kycApplication.update({
         where: { applicationId },
         data: updateData,
@@ -404,9 +439,14 @@ const saveStep = async (req, res, next) => {
 
 const uploadDocument = (req, res) => {
   if (!req.file) return res.status(400).json({ success: false, error: "No file uploaded" });
+  
+  const finalPath = req.file.path && req.file.path.startsWith("http") 
+    ? req.file.path 
+    : `/uploads/${req.file.filename}`;
+    
   res.json({
     success: true,
-    path: `/uploads/${req.file.filename}`,
+    path: finalPath,
     filename: req.file.filename,
   });
 };
@@ -463,7 +503,7 @@ const submitKyc = async (req, res, next) => {
       where: { applicationId },
       data: serializeJsonFields({
         status: "under_review",
-        currentStep: Math.max(Number(app.currentStep || 0), 16),
+        currentStep: Math.max(Number(app.currentStep || 0), 14),
         submittedAt: new Date(),
         personalDetails: mergedPersonalDetails,
         identityMethod: data?.identityMethod || app.identityMethod,
@@ -492,6 +532,7 @@ const submitKyc = async (req, res, next) => {
         segments: data?.segments || parseJsonField(app.segments),
         bsda: data?.bsda || app.bsda,
         nomineeAllocation: mergeJson(parseJsonField(app.nomineeAllocation), data?.nomineeAllocation),
+        generatedPdfBase64: data?.generatedPdfBase64 || app.generatedPdfBase64,
       }),
     });
 
@@ -589,6 +630,44 @@ const getKycConfig = async (req, res) => {
   }
 };
 
+const downloadPdf = async (req, res, next) => {
+  try {
+    const app = await prisma.kycApplication.findUnique({
+      where: { applicationId: req.params.applicationId },
+    });
+    if (!app || app.userId !== req.user.id) {
+      return res.status(404).json({ success: false, error: "Application not found" });
+    }
+
+    // Find the ESIGN document path
+    let pdfPath = null;
+    const documents = parseJsonField(app.documents, []);
+    const esignDoc = documents.find(doc => doc.type === "ESIGN" || (doc.type === "DIGILOCKER_DOCUMENT" && doc.path?.includes("digio_")));
+    if (esignDoc) {
+      pdfPath = esignDoc.path;
+    }
+
+    if (pdfPath) {
+      const fullPath = require("path").join(__dirname, "../../", pdfPath);
+      if (require("fs").existsSync(fullPath)) {
+        return res.download(fullPath, `KYC_Application_${app.applicationId}.pdf`);
+      }
+    }
+    
+    // Fallback to generated (unsigned) PDF if eSign download hasn't finished yet
+    if (app.generatedPdfBase64) {
+       const buffer = Buffer.from(app.generatedPdfBase64, 'base64');
+       res.setHeader('Content-Type', 'application/pdf');
+       res.setHeader('Content-Disposition', `attachment; filename=KYC_Application_${app.applicationId}_unsigned.pdf`);
+       return res.send(buffer);
+    }
+
+    return res.status(404).json({ success: false, error: "PDF not available yet. Please try again in a few seconds." });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   startKyc,
   getMyApplication,
@@ -600,4 +679,5 @@ module.exports = {
   getStatus,
   getKycConfig,
   getPincodeData,
+  downloadPdf,
 };

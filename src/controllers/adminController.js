@@ -219,16 +219,23 @@ const reviewApplication = async (req, res, next) => {
       const user = await prisma.user.findUnique({ where: { id: app.userId } });
       if (user && !user.eStamp) {
         await prisma.$transaction(async (tx) => {
-          const seq = await tx.sequence.upsert({
-            where: { name: 'eStamp' },
-            update: { value: { increment: 1 } },
-            create: { name: 'eStamp', value: 1 }
+          const availableStamp = await tx.eStamp.findFirst({
+            where: { status: "available" },
+            orderBy: { createdAt: "asc" }
           });
-          const formattedStamp = String(seq.value).padStart(6, '0');
-          await tx.user.update({
-            where: { id: app.userId },
-            data: { eStamp: formattedStamp }
-          });
+
+          if (availableStamp) {
+            await tx.eStamp.update({
+              where: { id: availableStamp.id },
+              data: { status: "assigned", assignedTo: user.id }
+            });
+            await tx.user.update({
+              where: { id: app.userId },
+              data: { eStamp: availableStamp.certificateNo }
+            });
+          } else {
+            console.warn(`[KYC Verification] No available E-Stamps for user ${user.id}`);
+          }
         });
       }
     }
